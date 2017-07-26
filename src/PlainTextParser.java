@@ -26,7 +26,7 @@ public class PlainTextParser {
 	
 	final static int N = 20*8;                //20位字符的bit位数
 	final static int MAX_LEN = N/8;          //word填充后长度
-	static String KEY_E = "26b21eb5c65f7126363e59b333327ec8548320df";//E密钥
+	public static String KEY_E = "26b21eb5c65f7126363e59b333327ec8548320df";//E密钥
 //	static String SEED = "26b21eb5c65f7126363e59b333327ec8548320df"; //随机数种子
 //	static SecureRandom random = new SecureRandom();
 	
@@ -39,19 +39,20 @@ public class PlainTextParser {
 
 	public static void main(String[] args) {
 ////		random.setSeed(hex2bytes(SEED)); //设定随机数生成器种子
-		
-		String filePath = "/home/zk/eclipse-workspace/searchoncrypt/src/test";
+		final String packagePath = System.getProperty("user.dir");
+		final String sourcePath = packagePath+"/sources/";;
 		
 		//分词
-		List<String> words = cut_words(filePath);
+		List<String> words = cut_words(sourcePath+"test.txt");
 		//打印
-		for (String word: words) {
-			System.out.println(word);
-		}
+//		for (String word: words) {
+//			System.out.println(word);
+//		}
 		//扩充词并异或
 		List<byte[]> enwords = extend_encrypt_words(words);
 		//解密词
 		List<String> dewords = decrypt_words(enwords);
+
 		for (String item: dewords) {
 			System.out.println(item);
 		}
@@ -90,7 +91,6 @@ public class PlainTextParser {
 		List<byte[]> encryptwords = new ArrayList<byte[]>();
 		
 		for (String word: words) {
-			System.out.println(word);
 			byte[] word_bytes = word.getBytes();
 			byte[] word_block = new byte[MAX_LEN];
 			Arrays.fill(word_block, (byte)0);
@@ -98,7 +98,7 @@ public class PlainTextParser {
 				word_bytes = Arrays.copyOf(word_bytes, MAX_LEN);
 			}
 			System.arraycopy(word_bytes, 0, word_block, 0, word_bytes.length);
-			
+//System.out.println("source word:"+Arrays.toString(word_block));
 			encryptwords.add(bytesAESencode(word_block, KEY_E));
 				
 		}
@@ -159,7 +159,7 @@ public class PlainTextParser {
             SecretKey secretKey = kgen.generateKey();
             byte[] enCodeFormat = secretKey.getEncoded();
             key2 = new SecretKeySpec(enCodeFormat, "AES");
-        } catch (NoSuchAlgorithmException e) {
+		} catch (NoSuchAlgorithmException e) {
         	e.printStackTrace();
         }
         return key2;
@@ -173,7 +173,6 @@ public class PlainTextParser {
 	 * @return
 	 */
 	public static byte[] bytesAESencode(byte[] word, String mykey) {
-
 		try {
 			Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
 			cipher.init(Cipher.ENCRYPT_MODE, genAESkey(mykey));
@@ -200,9 +199,7 @@ public class PlainTextParser {
 	 * @return
 	 */
 	public static byte[] bytesAESdecode(byte[] word, String mykey) {
-		
 		try {
-			
 			Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
 			cipher.init(Cipher.DECRYPT_MODE, genAESkey(mykey));
 			byte[] result = cipher.doFinal(word);
@@ -263,8 +260,7 @@ public class PlainTextParser {
 			br.close();
 			
 			String[] words = fileContent.split("\\s+");
-			System.out.println(fileContent);
-			
+
 			String re = "(\\pP)";
 			Pattern p = Pattern.compile(re);
 			

@@ -1,3 +1,5 @@
+import com.sun.org.apache.bcel.internal.generic.SIPUSH;
+
 import java.io.*;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -12,48 +14,56 @@ public class SearchOnEcrypt {
     static final String sourcePath = packagePath+"/sources/";
     static final String encryptPath = packagePath+"/encrypt/";
     static final String decryptPath = packagePath+"/decrypt/";
-    static final int n =  20*8;
-    static final int m = 32;
+    //加密后每个单词的长度（byte）
+    static final int N = 32;
+    //Fki的长度
+    static final int M = 20;
 
-    private static PlainTextParser plainTextParser;
-    private static GenStream FlowCipherGenerator;
-
-    public static String byteToBit(byte b) {
-        return ""
-                + (byte) ((b >> 7) & 0x1) + (byte) ((b >> 6) & 0x1)
-                + (byte) ((b >> 5) & 0x1) + (byte) ((b >> 4) & 0x1)
-                + (byte) ((b >> 3) & 0x1) + (byte) ((b >> 2) & 0x1)
-                + (byte) ((b >> 1) & 0x1) + (byte) ((b >> 0) & 0x1);
-    }
-
-    //初始化
-    public static void init(){
-        plainTextParser = new PlainTextParser();
-        FlowCipherGenerator = new GenStream();
-    }
 
     public static void main(String[] args) {
-        init();
-        doEncrypt();
+        doEncrypt(sourcePath);
+        doDecrypt();
+        doSearch(".");
     }
 
-    //将所有文件加密
-    public static void doEncrypt(){
+    /**
+     *将目录下所有文件加密
+     * @param sourcePath 待加密文件目录
+     * */
+    public static void doEncrypt(String sourcePath){
         File dir = new File(sourcePath);
+        //遍历文件夹下面的每个文件
         if (dir.exists() && dir.isDirectory()){
             for (File sourceFile: dir.listFiles()){
                 BufferedOutputStream bos = null;
                 try {
-                    bos = new BufferedOutputStream(new FileOutputStream(sourceFile));
+                    bos = new BufferedOutputStream(new FileOutputStream(encryptPath+sourceFile.getName()));
+                    //获取加密好的单词集
                     List<byte[]> plainSequence = getEncryptSequence(sourceFile.getAbsolutePath());
-                    //逐个明文加密
-                    for (byte[] encryptedWord : plainSequence ){
-                        byte[] flowCipher = getFlowCipher();
-                        byte[] cryptWord = new byte[n];
+                    //获取加密用的随机数
+                    List<byte[]> randomSequence = getRandomSequence(N-M, plainSequence.size());
+
+                    //逐个单词加密
+                    for (int i = 0; i< plainSequence.size(); i++){
+                        //每个单词
+                        byte[] encryptedWord = plainSequence.get(i);
+                        //前n-m byte的 Li部分，用于生成Ki
+                        byte[] Li = Arrays.copyOfRange(encryptedWord,0,N-M);
+                        byte[] Si = randomSequence.get(i);
+                        byte[] Ki = getKi(Li);
+                        //根据Si, Ki 获取流密码
+                        byte[] flowCipher = getFlowCipher(Si,Ki);
+                        byte[] cryptWord = new byte[N];
+
                         //明文序列和流密码异或，生成密文
-                        for (int i = 0; i< encryptedWord.length;i++){
-                            cryptWord[i] = (byte) (encryptedWord[i] ^ flowCipher[i]);
+                        for (int j = 0; j< encryptedWord.length;j++){
+                            cryptWord[j] = (byte) (encryptedWord[j] ^ flowCipher[j]);
                         }
+//System.out.println("cryptword:"+Arrays.toString(cryptWord));
+//System.out.println("flowcipher:"+Arrays.toString(flowCipher));
+//System.out.println("Si:"+Arrays.toString(Si));
+//System.out.println("Li:"+Arrays.toString(Li));
+//System.out.println("Ki:"+Arrays.toString(Ki));
                         //将密文写入文件
                         bos.write(cryptWord);
                     }
@@ -76,15 +86,21 @@ public class SearchOnEcrypt {
 
     }
 
+
     /**
     * 搜索单词
      * @param word 查询的单词
-     * @param ki 用于解密的密钥
     * @return 包含该单词的文件列表
     */
-    public static List<String> doSearch(String word, byte[] ki){
+    public static List<String> doSearch(String word){
+        //保存包含目标单词的所有文件路径
         List<String> fileList = new ArrayList<String>();
-        byte[] parsedWord = parseWord(word);
+        //处理要搜索的单词
+        byte[] searchWord = parseWord(word);
+        //获取前半部分用于生成Ki
+        byte[] Li = Arrays.copyOf(searchWord,N-M);
+        //生成用于解密的Ki
+        byte[] Ki = getKi(Li);
         File dir = new File(encryptPath);
         //获取文件目录下所有加密文件
         if (dir.isDirectory()){
@@ -93,18 +109,19 @@ public class SearchOnEcrypt {
                 byte[] flowCipher = null;
                 try {
                     FileInputStream fis = new FileInputStream(encyptFile);
-                    byte[] wordSequence = new byte[m / 8];
-                    byte[] result = new byte[m / 8];
+                    byte[] wordSequence = new byte[N];
+                    byte[] result = new byte[N];
                     int ret = 0;
                     boolean isFound = false;
                     // 逐个文件搜索匹配
                     while ((ret = fis.read(wordSequence)) != -1) {
                         for (int i = 0; i < wordSequence.length; i++) {
-                            result[i] = (byte) (wordSequence[i] ^ parsedWord[i]);
+                            result[i] = (byte) (wordSequence[i] ^ searchWord[i]);
                         }
                         //验证结果是否符合流密码解密。
-                        if (varify(result)) {
+                        if (varify(result,Ki)) {
                             fileList.add(encyptFile.getAbsolutePath());
+                            System.out.println("find a file:"+encyptFile.getAbsolutePath());
                             break;
                         }
                     }
@@ -114,75 +131,124 @@ public class SearchOnEcrypt {
                     e.printStackTrace();
                 }
             }
+            if (fileList.isEmpty()){
+                System.out.println("no such file");
+            }
+            for (String file: fileList){
+                System.out.println(file);
+            }
         }
         return fileList;
     }
 
     /**
-     * 解密操作
-     * @param fileName 要解密的文件
+     * 解密文件操作
+     * 要解密的文件目录
      * */
-    public static void doDecrypt(String fileName){
+    public static void doDecrypt(){
         //解密后存放路径
-        File decryptSaveFile = new File(encryptPath+fileName);
-        FileInputStream fis =  null;
-        BufferedOutputStream bos = null;
-        try {
-            fis = new FileInputStream(decryptSaveFile);
-            bos = new BufferedOutputStream(new FileOutputStream(decryptPath+fileName));
-            byte[] encryptWord = new byte[n/8];
-            byte[] plainWord = new byte[n/8];
-            byte[] realPlainWord = null;
-            byte[] flowCipher = null;
-            int ret = 0;
-            //读取加密文件，用流密码解密
-            while ((ret = fis.read(encryptWord))!= -1){
-                flowCipher = getFlowCipher();
-                for (int i =0; i<encryptWord.length; i++){
-                    //流密码解密
-                    plainWord[i] =(byte)(encryptWord[i]^flowCipher[i]);
-                }
-                //对称解密
-                realPlainWord = decryptWord(plainWord);
-                // 解密后写入文件
-                bos.write(realPlainWord);
-            };
-            bos.flush();
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }finally {
-            if(fis != null){
+        File dir = new File(encryptPath);
+        if (dir.isDirectory()){
+            for (File decryptFile: dir.listFiles()){
+                List<byte[]> words = new ArrayList<byte[]>();
+
+                FileInputStream fis =  null;
+                FileWriter fw = null;
                 try {
-                    fis.close();
+                    fis = new FileInputStream(decryptFile);
+                    fw = new FileWriter(new File(decryptPath+decryptFile.getName()));
+                    //获取文档的单词个数
+                    int wordCount = (int)decryptFile.length()/N;
+                    List<byte[]> randomSequence = RandomSequenceGenerator.getRandomSequence(N-M,wordCount);
+                    byte[] encryptWord = new byte[N];
+                    int ret = 0;
+                    //读取加密文件，用流密码解密
+                    int index = 0;
+                    while ((ret = fis.read(encryptWord))!= -1){
+                        //首先计算Li
+                        byte[] Si = randomSequence.get(index++);
+                        //解出加密单词的左半部分
+                        byte[] Li = new byte[N-M];
+                        for (int i = 0; i< Si.length;i++){
+                            Li[i] = (byte)(encryptWord[i] ^ Si[i]);
+                        }
+                        //计算Ki
+                        byte[] Ki = getKi(Li);
+                        //计算解密用的流密码
+                        byte[] flowCipher = getFlowCipher(Si,Ki);
+                        //计算单词的明文
+                        byte[] plainWord = new byte[N];
+                        for (int i =0; i<encryptWord.length; i++){
+                            //流密码解密
+                            plainWord[i] =(byte)(encryptWord[i]^flowCipher[i]);
+                        }
+//System.out.println("decryptword:"+Arrays.toString(plainWord));
+//System.out.println("decrypt word:"+Arrays.toString(plainWord));
+//System.out.println("flowcipher:"+Arrays.toString(flowCipher));
+//System.out.println("Si:"+Arrays.toString(Si));
+//System.out.println("Li:"+Arrays.toString(Li));
+//System.out.println("Ki:"+Arrays.toString(Ki));
+                        words.add(plainWord);
+                    };
+                    String txt = wordToArticle(words);
+                    fw.write(txt);
+                    fw.flush();
+                } catch (FileNotFoundException e) {
+                    e.printStackTrace();
                 } catch (IOException e) {
                     e.printStackTrace();
-                }
-            }
-            if (bos != null){
-                try {
-                    bos.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
+                }finally {
+                    if (fis != null) {
+                        try {
+                            fis.close();
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    if (fw != null) {
+                        try {
+                            fw.close();
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    }
                 }
             }
         }
 
+
+    }
+
+    /**
+     *
+     * */
+    private static String wordToArticle(List<byte[]> words) {
+        for (byte[] word: words){
+            System.out.println("wordToArticle:"+Arrays.toString(word));
+        }
+        List<String> decryptWords = PlainTextParser.decrypt_words(words);
+        String txt = PlainTextParser.words_to_article(decryptWords);
+        System.out.println(txt);
+        return  txt;
     }
 
     /**
      * 验证单词是否匹配
      * */
-    private static boolean varify(byte[] result) {
-        byte[] Li = Arrays.copyOfRange(result,0,m-n);
-        byte[] Ri = Arrays.copyOfRange(result,m-n,m);
+    private static boolean varify(byte[] result,byte[] Ki) {
+        byte[] Li = Arrays.copyOfRange(result,0,N-M);
+        byte[] Ri = Arrays.copyOfRange(result,N-M,N);
         //需要伪随机函数
-        byte[] Fki = getPsudorandom(Li);
+        byte[] flowCipher = getFlowCipher(Li,Ki);
+        byte[] Fki = Arrays.copyOfRange(flowCipher,N-M,N);
+        System.out.println("Fkilen:"+Fki.length);
+        System.out.println("Fki:"+Arrays.toString(Fki));
+        System.out.println("Ri:"+Arrays.toString(Ri));
         boolean isMatched = true;
-        for (int i = 0; i< m; i++){
+        for (int i = 0; i< M; i++){
             if (Ri[i] != Fki[i]){
                 isMatched = false;
+                break;
             }
         }
         return isMatched;
@@ -190,24 +256,39 @@ public class SearchOnEcrypt {
 
     //到时使用代理模式，将别的代码封装起来
 
+
     private static byte[] decryptWord(byte[] b) {
-        return new byte[n];
+        return PlainTextParser.bytesAESdecode(b, PlainTextParser.KEY_E);
     }
 
-    private static byte[] getPsudorandom(byte[] li) {
-        return new byte[n-m];
+
+    private static byte[] getFlowCipher(byte[] Si, byte[] Ki){
+        return RandomSequenceGenerator.getFlowCipher(Si,Ki);
     }
 
-    private static byte[] getFlowCipher() {
-        return new byte[10];
+
+    private static byte[] getKi(byte[] Li) {
+        return RandomSequenceGenerator.getKi(Li);
     }
 
     private static List<byte[]> getEncryptSequence(String filePath) {
-        List<byte[]> encryptSequence = plainTextParser.extend_encrypt_words(plainTextParser.cut_words(filePath));
+        List<byte[]> encryptSequence = PlainTextParser.extend_encrypt_words(PlainTextParser.cut_words(filePath));
         return encryptSequence;
     }
 
     private static byte[] parseWord(String word) {
-        return new byte[10];
+        byte[] word_bytes = word.getBytes();
+        byte[] word_block = new byte[20];
+        Arrays.fill(word_block, (byte)0);
+        if (word_bytes.length >  20) {
+            word_bytes = Arrays.copyOf(word_bytes, 20);
+        }
+        System.arraycopy(word_bytes, 0, word_block, 0, word_bytes.length);
+        System.out.println("parse word:"+Arrays.toString(PlainTextParser.bytesAESencode(word_block,PlainTextParser.KEY_E)));
+        return PlainTextParser.bytesAESencode(word_block,PlainTextParser.KEY_E);
+    }
+
+    public static List<byte[]> getRandomSequence(int len,int sequence_size) throws IOException {
+        return RandomSequenceGenerator.getRandomSequence(len, sequence_size);
     }
 }
